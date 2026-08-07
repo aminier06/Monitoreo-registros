@@ -9314,94 +9314,64 @@ function onCentroKey(e) {
   }
 }
 
-function _showDashboard(pc, sc, warnings, fromCache) {
-  try {
-    ALL = [...pc, ...sc];
-    poblarTiposCentro();
-    document.getElementById('msg').style.display = 'none';
-    document.getElementById('dc').style.display  = 'block';
-    const upd = document.getElementById('upd');
-    const sinDatos = warnings && warnings[0] === 'sin-datos';
-    if (!pc.length && !sc.length) {
-      if (sinDatos) {
-        upd.innerHTML = '<span style="color:#8a9ab5;font-size:11px">Período no iniciado — sin registros aún · ' +
-          '<a href="#" onclick="lsClear();loadAll();return false;" style="color:#1A6FAB;text-decoration:underline">Actualizar</a></span>';
-      } else {
-        upd.innerHTML = '<span style="color:#EF9F27;font-size:11px">⚠ Sin conexión · ' +
-          '<a href="#" onclick="loadAll();return false;" style="color:#1A6FAB;text-decoration:underline">Reintentar</a></span>';
-      }
-    } else {
-      const age = fromCache ? ` · <span style="color:#8a9ab5;font-size:11px">caché ${Math.round((Date.now()-fromCache)/60000)} min · <a href="#" onclick="lsClear();loadAll();return false;" style="color:#1A6FAB">Actualizar</a></span>` : '';
-      upd.innerHTML = `Sep 2026 · ${pc.length} reg. 1er ciclo · ${sc.length} reg. 2do ciclo${age}`;
-    }
-    cascadeR();
-  } catch(err) {
-    console.error('[SIREV]', err);
-    document.getElementById('msg').style.display = 'none';
-    document.getElementById('dc').style.display  = 'block';
-  }
-}
+function loadAll() {
+  // Mostrar dashboard de inmediato — nunca bloquear la UI
+  ALL = [];
+  try { poblarTiposCentro(); } catch(e) {}
+  const msg = document.getElementById('msg');
+  const dc  = document.getElementById('dc');
+  if (msg) msg.style.display = 'none';
+  if (dc)  dc.style.display  = 'block';
+  const upd = document.getElementById('upd');
+  if (upd) upd.innerHTML = '<span style="color:#8a9ab5;font-size:11px">⏳ Cargando Sep 2026...</span>';
+  try { cascadeR(); } catch(e) { console.error(e); }
 
-async function loadAll() {
-  // 1. Intentar caché localStorage primero
+  // Intentar caché
   const cached = loadCache();
   if (cached) {
     const { pc, sc, ts } = cached;
     pc.forEach(r => r._ciclo = 'pc');
     sc.forEach(r => r._ciclo = 'sc');
-    _showDashboard(pc, sc, [], ts);
-    // Actualizar en background sin bloquear UI
-    _refreshInBackground();
-    return;
+    ALL = [...pc, ...sc];
+    try { poblarTiposCentro(); cascadeR(); } catch(e) {}
+    const age = Math.round((Date.now()-ts)/60000);
+    if (upd) upd.innerHTML = `Sep 2026 · ${pc.length} reg. 1er ciclo · ${sc.length} reg. 2do ciclo <span style="color:#8a9ab5;font-size:11px">(caché ${age} min · <a href="#" onclick="lsClear();loadAll();return false;" style="color:#1A6FAB">Actualizar</a>)</span>`;
   }
 
-  // 2. Sin caché — mostrar UI de carga con opción manual
-  document.getElementById('msg').style.display = 'block';
-  document.getElementById('dc').style.display  = 'none';
-  document.getElementById('msg').innerHTML = `
-    <div class="spinner" id="load-spinner"></div>
-    <div style="margin-bottom:6px;font-weight:500">Conectando con Google Sheets...</div>
-    <div id="load-status" style="font-size:11px;color:#8a9ab5;margin-bottom:16px"></div>
-    <div style="border-top:1px solid #dde6f0;padding-top:16px;margin-top:4px">
-      <div style="font-weight:600;font-size:13px;margin-bottom:4px">Cargar archivos manualmente</div>
-      <div style="font-size:12px;color:#4a6080;margin-bottom:10px">
-        Descarga los CSV desde Google Sheets y selecciónalos aquí:
-      </div>
-      <div style="display:flex;flex-direction:column;gap:8px;text-align:left;max-width:400px;margin:0 auto">
-        <label style="font-size:12px;display:flex;align-items:center;gap:8px">
-          <span style="min-width:90px;font-weight:500">1er ciclo:</span>
-          <input type="file" id="file-pc" accept=".csv" onchange="loadCSVFile('pc')" style="font-size:12px">
-        </label>
-        <label style="font-size:12px;display:flex;align-items:center;gap:8px">
-          <span style="min-width:90px;font-weight:500">2do ciclo:</span>
-          <input type="file" id="file-sc" accept=".csv" onchange="loadCSVFile('sc')" style="font-size:12px">
-        </label>
-      </div>
-      <div id="manual-status" style="font-size:12px;color:#1D9E75;margin-top:10px;min-height:18px"></div>
-    </div>`;
-
-  // 3. Intentar fetch automático en background (no bloquea UI)
-  _refreshInBackground();
+  // Fetch en background — si funciona, actualiza; si no, no importa (ya hay dashboard)
+  _fetchBackground();
 }
 
-async function _refreshInBackground() {
+async function _fetchBackground() {
+  const upd = document.getElementById('upd');
   try {
+    const tpc = new Promise(res => setTimeout(() => res(null), 12000));
+    const tsc = new Promise(res => setTimeout(() => res(null), 12000));
     const [pcRows, scRows] = await Promise.all([
-      fetchEval(IDS.pc).catch(() => null),
-      fetchEval(IDS.sc).catch(() => null)
+      Promise.race([fetchEval(IDS.pc).catch(() => null), tpc]),
+      Promise.race([fetchEval(IDS.sc).catch(() => null), tsc])
     ]);
     const pc = pcRows || [], sc = scRows || [];
     pc.forEach(r => r._ciclo = 'pc');
     sc.forEach(r => r._ciclo = 'sc');
-    if (pc.length || sc.length) saveCache(pc, sc);
-    // Show dashboard regardless — 0 rows means period not started yet
-    _showDashboard(pc, sc, pc.length || sc.length ? [] : ['sin-datos']);
+    if (pc.length || sc.length) {
+      saveCache(pc, sc);
+      ALL = [...pc, ...sc];
+      try { poblarTiposCentro(); cascadeR(); } catch(e) { console.error(e); }
+      if (upd) upd.innerHTML = `Sep 2026 · ${pc.length} reg. 1er ciclo · ${sc.length} reg. 2do ciclo`;
+    } else {
+      if (upd && upd.textContent.includes('Cargando')) {
+        upd.innerHTML = '<span style="color:#8a9ab5;font-size:11px">Período no iniciado · <a href="#" onclick="loadAll();return false;" style="color:#1A6FAB">Reintentar</a></span>';
+      }
+    }
   } catch(e) {
-    _showDashboard([], [], ['sin-datos']);
+    console.warn('[SIREV] background fetch error:', e);
+    if (upd && upd.textContent.includes('Cargando')) {
+      upd.innerHTML = '<span style="color:#8a9ab5;font-size:11px">Sin conexión · <a href="#" onclick="loadAll();return false;" style="color:#1A6FAB">Reintentar</a></span>';
+    }
   }
 }
 
-// Cargar al inicio
 loadAll();
 </script>
 </body>
