@@ -433,15 +433,56 @@ tbody td.num { text-align:right; font-variant-numeric:tabular-nums; font-weight:
   </button>
 </div>
 
-<!-- PERIOD TABS — 2025-2026 -->
+<!-- PERIOD TABS — 2026-2027 -->
 <div class="period-tabs" id="ptabs-2026-2027" role="tablist">
   <button class="ptab active" onclick="setPeriod('SEPT26',this)" role="tab">
     <span class="ptab-label">Septiembre</span>
-    <span class="ptab-sub">Sep 2026 · En curso</span>
+    <span class="ptab-sub" id="tab-sub-SEPT26">Sep 2026 · En curso</span>
+  </button>
+  <button class="ptab" onclick="setPeriod('NOV26',this)" role="tab">
+    <span class="ptab-label">Noviembre</span>
+    <span class="ptab-sub" id="tab-sub-NOV26">Nov 2026</span>
+  </button>
+  <button class="ptab" onclick="setPeriod('MAR27',this)" role="tab">
+    <span class="ptab-label">Marzo</span>
+    <span class="ptab-sub" id="tab-sub-MAR27">Mar 2027</span>
+  </button>
+  <button class="ptab" onclick="setPeriod('MAYO27',this)" role="tab">
+    <span class="ptab-label">Mayo</span>
+    <span class="ptab-sub" id="tab-sub-MAYO27">Mayo 2027</span>
   </button>
 </div>
 
 <div id="msg"><div class="spinner"></div>Cargando datos...<div class="proxy-status" id="proxy-status"></div></div>
+
+<div id="upload-panel" style="display:none;padding:32px 24px;text-align:center;">
+  <div style="max-width:480px;margin:0 auto;background:var(--surface);border-radius:16px;box-shadow:var(--shadow);padding:28px 28px 24px;">
+    <div style="font-size:22px;margin-bottom:8px">📂</div>
+    <div id="upload-period-title" style="font-weight:700;font-size:15px;color:var(--text);margin-bottom:6px">Cargar datos del período</div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:20px">Descarga y publica cada hoja como CSV desde Google Sheets, luego súbelas aquí.</div>
+    <div style="display:flex;flex-direction:column;gap:12px;text-align:left">
+      <label style="display:flex;align-items:center;gap:10px;padding:12px 14px;border:1.5px dashed var(--border-strong);border-radius:10px;cursor:pointer;background:var(--surface2)">
+        <span style="font-size:20px">1️⃣</span>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600;color:var(--text)">1er Ciclo (Pública)</div>
+          <div id="upload-status-pc" style="font-size:11px;color:var(--text3)">Ningún archivo seleccionado</div>
+        </div>
+        <input type="file" id="file-pc" accept=".csv" style="display:none" onchange="loadCSVFile('pc')">
+        <span style="font-size:11px;color:var(--blue);font-weight:600">Seleccionar</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;padding:12px 14px;border:1.5px dashed var(--border-strong);border-radius:10px;cursor:pointer;background:var(--surface2)">
+        <span style="font-size:20px">2️⃣</span>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600;color:var(--text)">2do Ciclo (Semioficial)</div>
+          <div id="upload-status-sc" style="font-size:11px;color:var(--text3)">Ningún archivo seleccionado</div>
+        </div>
+        <input type="file" id="file-sc" accept=".csv" style="display:none" onchange="loadCSVFile('sc')">
+        <span style="font-size:11px;color:var(--blue);font-weight:600">Seleccionar</span>
+      </label>
+    </div>
+    <div id="manual-status" style="margin-top:14px;font-size:12px;color:var(--text3);min-height:18px"></div>
+  </div>
+</div>
 
 <div id="dc">
 
@@ -590,10 +631,36 @@ tbody td.num { text-align:right; font-variant-numeric:tabular-nums; font-weight:
 <script>
 const SECTORES_OK = ['público','publico','semioficial'];
 function fmtN(n) { return Number(n).toLocaleString('es-DO'); }
-const IDS = {
-  pc: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS4mPQzPP4D8jyHdzf2p-pOV5b3NyLzFeabQX2kQF4Qc49OKIUh-utTnuXxrrF7g3cez6GiQa3rslqM/pub?gid=1494688475&single=true&output=csv',
-  sc: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRLgh6YbQQPRcbvY35hINEeG2UdG2lcgzjIX-gLwVDwqubw1u6zpMN7eEZo96p4_tbp5rQYgZiCbGmo/pub?gid=686240148&single=true&output=csv'
+// ── Configuración por período 2026-2027 ──────────────────────────────────────
+// Para activar un período: poner las URLs de Google Sheets publicadas como CSV.
+// Si la URL es null, el período muestra panel de carga manual.
+const PERIOD_CFG = {
+  SEPT26: {
+    label: 'Sep 2026',
+    ls: { pc: 'sirev_sept26_pc', sc: 'sirev_sept26_sc', ts: 'sirev_sept26_ts' },
+    urls: {
+      pc: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS4mPQzPP4D8jyHdzf2p-pOV5b3NyLzFeabQX2kQF4Qc49OKIUh-utTnuXxrrF7g3cez6GiQa3rslqM/pub?gid=1494688475&single=true&output=csv',
+      sc: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRLgh6YbQQPRcbvY35hINEeG2UdG2lcgzjIX-gLwVDwqubw1u6zpMN7eEZo96p4_tbp5rQYgZiCbGmo/pub?gid=686240148&single=true&output=csv'
+    }
+  },
+  NOV26: {
+    label: 'Nov 2026',
+    ls: { pc: 'sirev_nov26_pc', sc: 'sirev_nov26_sc', ts: 'sirev_nov26_ts' },
+    urls: { pc: null, sc: null }  // ← Pegar URL cuando se publique la hoja
+  },
+  MAR27: {
+    label: 'Mar 2027',
+    ls: { pc: 'sirev_mar27_pc', sc: 'sirev_mar27_sc', ts: 'sirev_mar27_ts' },
+    urls: { pc: null, sc: null }  // ← Pegar URL cuando se publique la hoja
+  },
+  MAYO27: {
+    label: 'Mayo 2027',
+    ls: { pc: 'sirev_mayo27_pc', sc: 'sirev_mayo27_sc', ts: 'sirev_mayo27_ts' },
+    urls: { pc: null, sc: null }  // ← Pegar URL cuando se publique la hoja
+  }
 };
+// Acceso rápido (retrocompatibilidad)
+const IDS = PERIOD_CFG.SEPT26.urls;
 
 const CATALOGO_DATA = [
 ["00002", "15 - SANTO DOMINGO", "1505 - HERRERA", "00002 - NUESTRA SENORA DE LA ALTAGRACIA", "PÚBLICO"],
@@ -8132,7 +8199,7 @@ const HIST_DETAIL = {"SEPT":{"centros":{"09537":[52,60],"03202":[5,14],"14668":[
 
 // ── ACTIVE PERIOD & MODE ──────────────────────────────────────────────────────
 let _activePeriod = 'SEPT26';
-const LIVE_PERIODS = new Set(['SEPT26']);
+const LIVE_PERIODS = new Set(['SEPT26','NOV26','MAR27','MAYO27']);
 function renderCurrent() {
   if (LIVE_PERIODS.has(_activePeriod)) {
     renderAll();
@@ -8160,25 +8227,33 @@ function setYear(year, btn) {
 
 function setPeriod(p, btn) {
   _activePeriod = p;
-  document.querySelectorAll('.period-tabs:not([style*="none"]) .ptab').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.period-tabs .ptab').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
 
-  if (p === 'SEPT26') {
-    if (ALL.length > 0) {
-      // Data already loaded — just re-render
+  if (LIVE_PERIODS.has(p)) {
+    // Período live — cargar datos del período seleccionado
+    const cached = loadCache(p);
+    if (cached && ALL.length > 0 && p === (window._lastLoadedPeriod || 'SEPT26')) {
+      // Mismo período ya cargado — solo re-renderizar
       document.getElementById('msg').style.display = 'none';
+      const up = document.getElementById('upload-panel');
+      if (up) up.style.display = 'none';
       document.getElementById('dc').style.display  = 'block';
       renderAll();
     } else {
-      // First time — load once
-      document.getElementById('msg').style.display = 'block';
-      document.getElementById('dc').style.display  = 'none';
-      loadAll();
+      // Cambio de período o primera carga
+      ALL = [];
+      loadAll(p);
     }
+    window._lastLoadedPeriod = p;
   } else {
+    // Período histórico (2025-2026)
     const labels = {SEPT:'Sep 2025', NOV:'Nov 2025', MAR:'Mar 2026', MAYO:'Mayo 2026'};
-    document.getElementById('upd').textContent = `Período: ${labels[p]}`;
+    const upd = document.getElementById('upd');
+    if (upd) upd.textContent = `Período: ${labels[p] || p}`;
     document.getElementById('msg').style.display = 'none';
+    const up = document.getElementById('upload-panel');
+    if (up) up.style.display = 'none';
     document.getElementById('dc').style.display  = 'block';
     renderHistPeriod(p);
   }
@@ -8463,22 +8538,32 @@ function mapCSVRows(rawRows) {
 }
 
 // ── localStorage cache ────────────────────────────────────────────────────────
-const LS = { pc: 'sirev_sept26_pc', sc: 'sirev_sept26_sc', ts: 'sirev_sept26_ts' };
 const LS_MAX_AGE = 6 * 60 * 60 * 1000; // 6 horas
 
 function lsGet(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } }
 function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) { console.warn('LS full', e); } }
-function lsClear() { [LS.pc, LS.sc, LS.ts].forEach(k => localStorage.removeItem(k)); }
 
-function loadCache() {
-  const ts = lsGet(LS.ts);
+function lsClear(p) {
+  p = p || _activePeriod;
+  const ls = PERIOD_CFG[p] && PERIOD_CFG[p].ls;
+  if (ls) [ls.pc, ls.sc, ls.ts].forEach(k => localStorage.removeItem(k));
+}
+
+function loadCache(p) {
+  p = p || _activePeriod;
+  const ls = PERIOD_CFG[p] && PERIOD_CFG[p].ls;
+  if (!ls) return null;
+  const ts = lsGet(ls.ts);
   if (!ts || Date.now() - ts > LS_MAX_AGE) return null;
-  const pc = lsGet(LS.pc), sc = lsGet(LS.sc);
+  const pc = lsGet(ls.pc), sc = lsGet(ls.sc);
   if (!pc || !sc) return null;
   return { pc, sc, ts };
 }
-function saveCache(pc, sc) {
-  lsSet(LS.pc, pc); lsSet(LS.sc, sc); lsSet(LS.ts, Date.now());
+function saveCache(pc, sc, p) {
+  p = p || _activePeriod;
+  const ls = PERIOD_CFG[p] && PERIOD_CFG[p].ls;
+  if (!ls) return;
+  lsSet(ls.pc, pc); lsSet(ls.sc, sc); lsSet(ls.ts, Date.now());
 }
 
 // ── Fetch via CORS proxy (intento en background) ──────────────────────────────
@@ -8514,24 +8599,46 @@ async function fetchEval(id) {
 }
 
 // ── Carga manual desde archivo CSV ───────────────────────────────────────────
-let _manualPC = null, _manualSC = null;
+// _manualBuf guarda PC/SC pendiente para el período activo al momento de la carga
+const _manualBuf = {};  // { [period]: { pc: rows|null, sc: rows|null } }
+
+function _getBuf(p) {
+  if (!_manualBuf[p]) _manualBuf[p] = { pc: null, sc: null };
+  return _manualBuf[p];
+}
 
 function loadCSVFile(ciclo) {
   const input = document.getElementById('file-' + ciclo);
   if (!input || !input.files[0]) return;
+  const p = _activePeriod;
   const reader = new FileReader();
   reader.onload = (e) => {
     try {
       const parsed = Papa.parse(e.target.result.trim(), { header: true, skipEmptyLines: true });
       const rows = mapCSVRows(parsed.data);
       rows.forEach(r => r._ciclo = ciclo);
-      if (ciclo === 'pc') _manualPC = rows;
-      else _manualSC = rows;
+      const buf = _getBuf(p);
+      buf[ciclo] = rows;
 
+      const statusPc = document.getElementById('upload-status-pc');
+      const statusSc = document.getElementById('upload-status-sc');
       const statusEl = document.getElementById('manual-status');
-      if (_manualPC && _manualSC) {
-        saveCache(_manualPC, _manualSC);
-        _showDashboard(_manualPC, _manualSC, []);
+      const cfg = PERIOD_CFG[p];
+      const label = cfg ? cfg.label : p;
+
+      if (ciclo === 'pc' && statusPc) statusPc.textContent = `✓ ${rows.length} registros`;
+      if (ciclo === 'sc' && statusSc) statusSc.textContent = `✓ ${rows.length} registros`;
+
+      if (buf.pc && buf.sc) {
+        saveCache(buf.pc, buf.sc, p);
+        if (statusEl) statusEl.textContent = `✓ ${label} cargado — ${buf.pc.length + buf.sc.length} registros totales`;
+        ALL = [...buf.pc, ...buf.sc];
+        document.getElementById('upload-panel').style.display = 'none';
+        document.getElementById('msg').style.display = 'none';
+        document.getElementById('dc').style.display = 'block';
+        try { poblarTiposCentro(); cascadeR(); } catch(err) { console.error(err); }
+        const upd = document.getElementById('upd');
+        if (upd) upd.innerHTML = `${label} · ${buf.pc.length} reg. 1er ciclo · ${buf.sc.length} reg. 2do ciclo`;
       } else if (statusEl) {
         const otro = ciclo === 'pc' ? '2do ciclo (SC)' : '1er ciclo (PC)';
         statusEl.textContent = `✓ ${ciclo.toUpperCase()} cargado (${rows.length} registros). Falta: ${otro}`;
@@ -8541,8 +8648,9 @@ function loadCSVFile(ciclo) {
       if (statusEl) statusEl.textContent = 'Error al leer el archivo: ' + err.message;
     }
   };
-  reader.readAsText(input.files[0]);
+  reader.readAsText(input.files[0], 'UTF-8');
 }
+
 
 function num(r, k) { return parseInt(r[k] || 0) || 0; }
 function uniq(arr) { return [...new Set(arr.filter(Boolean))].sort(); }
@@ -9338,64 +9446,100 @@ function onCentroKey(e) {
   }
 }
 
-function loadAll() {
-  // Mostrar dashboard de inmediato — nunca bloquear la UI
+function loadAll(p) {
+  p = p || _activePeriod;
+  const cfg = PERIOD_CFG[p];
+  const label = cfg ? cfg.label : p;
+  const hasUrls = cfg && (cfg.urls.pc || cfg.urls.sc);
+
   ALL = [];
   try { poblarTiposCentro(); } catch(e) {}
+
   const msg = document.getElementById('msg');
   const dc  = document.getElementById('dc');
-  if (msg) msg.style.display = 'none';
-  if (dc)  dc.style.display  = 'block';
+  const up  = document.getElementById('upload-panel');
   const upd = document.getElementById('upd');
-  if (upd) upd.innerHTML = '<span style="color:#8a9ab5;font-size:11px">⏳ Cargando Sep 2026...</span>';
-  try { cascadeR(); } catch(e) { console.error(e); }
 
-  // Intentar caché
-  const cached = loadCache();
+  // Intentar caché primero
+  const cached = loadCache(p);
   if (cached) {
     const { pc, sc, ts } = cached;
     pc.forEach(r => r._ciclo = 'pc');
     sc.forEach(r => r._ciclo = 'sc');
     ALL = [...pc, ...sc];
+    if (msg) msg.style.display = 'none';
+    if (up)  up.style.display  = 'none';
+    if (dc)  dc.style.display  = 'block';
     try { poblarTiposCentro(); cascadeR(); } catch(e) {}
     const age = Math.round((Date.now()-ts)/60000);
-    if (upd) upd.innerHTML = `Sep 2026 · ${pc.length} reg. 1er ciclo · ${sc.length} reg. 2do ciclo <span style="color:#8a9ab5;font-size:11px">(caché ${age} min · <a href="#" onclick="lsClear();loadAll();return false;" style="color:#1A6FAB">Actualizar</a>)</span>`;
+    if (upd) upd.innerHTML = `${label} · ${pc.length} reg. 1er ciclo · ${sc.length} reg. 2do ciclo <span style="color:#8a9ab5;font-size:11px">(caché ${age} min · <a href="#" onclick="lsClear('${p}');loadAll('${p}');return false;" style="color:#1A6FAB">Actualizar</a>)</span>`;
+    if (hasUrls) _fetchBackground(p); // refrescar en background igual
+    return;
   }
 
-  // Fetch en background — si funciona, actualiza; si no, no importa (ya hay dashboard)
-  _fetchBackground();
+  // Sin caché: mostrar dashboard vacío + intentar fetch si hay URLs
+  if (msg) msg.style.display = 'none';
+  if (dc)  dc.style.display  = 'block';
+  if (up)  up.style.display  = 'none';
+  if (upd) upd.innerHTML = `<span style="color:#8a9ab5;font-size:11px">⏳ Cargando ${label}...</span>`;
+  try { cascadeR(); } catch(e) { console.error(e); }
+
+  if (hasUrls) {
+    _fetchBackground(p);
+  } else {
+    // Sin URLs configuradas → mostrar panel de carga manual
+    if (dc)  dc.style.display  = 'none';
+    if (up)  up.style.display  = 'block';
+    const title = document.getElementById('upload-period-title');
+    if (title) title.textContent = `Cargar datos — ${label}`;
+    // Reset buffer y estados
+    const buf = _getBuf(p);
+    buf.pc = null; buf.sc = null;
+    const spc = document.getElementById('upload-status-pc');
+    const ssc = document.getElementById('upload-status-sc');
+    const sm  = document.getElementById('manual-status');
+    if (spc) spc.textContent = 'Ningún archivo seleccionado';
+    if (ssc) ssc.textContent = 'Ningún archivo seleccionado';
+    if (sm)  sm.textContent  = '';
+    if (upd) upd.innerHTML   = `<span style="color:#8a9ab5;font-size:11px">${label} · sin datos</span>`;
+  }
 }
 
-async function _fetchBackground() {
+async function _fetchBackground(p) {
+  p = p || _activePeriod;
+  const cfg = PERIOD_CFG[p];
+  if (!cfg || !cfg.urls.pc) return; // sin URLs configuradas
+  const label = cfg.label;
   const upd = document.getElementById('upd');
   try {
-    const tpc = new Promise(res => setTimeout(() => res(null), 12000));
-    const tsc = new Promise(res => setTimeout(() => res(null), 12000));
+    const timeout = () => new Promise(res => setTimeout(() => res(null), 12000));
     const [pcRows, scRows] = await Promise.all([
-      Promise.race([fetchEval(IDS.pc).catch(() => null), tpc]),
-      Promise.race([fetchEval(IDS.sc).catch(() => null), tsc])
+      Promise.race([fetchEval(cfg.urls.pc).catch(() => null), timeout()]),
+      Promise.race([fetchEval(cfg.urls.sc).catch(() => null), timeout()])
     ]);
+    // Solo actualizar si seguimos en el mismo período
+    if (_activePeriod !== p) return;
     const pc = pcRows || [], sc = scRows || [];
     pc.forEach(r => r._ciclo = 'pc');
     sc.forEach(r => r._ciclo = 'sc');
     if (pc.length || sc.length) {
-      saveCache(pc, sc);
+      saveCache(pc, sc, p);
       ALL = [...pc, ...sc];
       try { poblarTiposCentro(); cascadeR(); } catch(e) { console.error(e); }
-      if (upd) upd.innerHTML = `Sep 2026 · ${pc.length} reg. 1er ciclo · ${sc.length} reg. 2do ciclo`;
+      if (upd) upd.innerHTML = `${label} · ${pc.length} reg. 1er ciclo · ${sc.length} reg. 2do ciclo`;
     } else {
       if (upd && upd.textContent.includes('Cargando')) {
-        upd.innerHTML = '<span style="color:#8a9ab5;font-size:11px">Período no iniciado · <a href="#" onclick="loadAll();return false;" style="color:#1A6FAB">Reintentar</a></span>';
+        upd.innerHTML = `<span style="color:#8a9ab5;font-size:11px">${label} · período no iniciado · <a href="#" onclick="loadAll('${p}');return false;" style="color:#1A6FAB">Reintentar</a></span>`;
       }
     }
   } catch(e) {
     console.warn('[SIREV] background fetch error:', e);
+    if (_activePeriod !== p) return;
     if (upd && upd.textContent.includes('Cargando')) {
-      upd.innerHTML = '<span style="color:#8a9ab5;font-size:11px">Sin conexión · <a href="#" onclick="loadAll();return false;" style="color:#1A6FAB">Reintentar</a></span>';
+      upd.innerHTML = `<span style="color:#8a9ab5;font-size:11px">Sin conexión · <a href="#" onclick="loadAll('${p}');return false;" style="color:#1A6FAB">Reintentar</a></span>`;
     }
   }
 }
-
 loadAll();
 </script>
 </body>
