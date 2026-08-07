@@ -1,4 +1,4 @@
-<!DOCTYPE html>  
+<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -9303,69 +9303,92 @@ function onCentroKey(e) {
   }
 }
 
+function _showDashboard(pc, sc, warnings) {
+  try {
+    ALL = [...pc, ...sc];
+    poblarTiposCentro();
+    document.getElementById('msg').style.display = 'none';
+    document.getElementById('dc').style.display  = 'block';
+    if (!pc.length && !sc.length) {
+      document.getElementById('upd').innerHTML =
+        '<span style="color:#EF9F27;font-size:11px">⚠ Sin conexión — datos históricos disponibles · ' +
+        '<a href="#" onclick="loadAll();return false;" style="color:#1A6FAB;text-decoration:underline">Reintentar</a></span>';
+    } else {
+      const warnHtml = warnings.length
+        ? ` · <span style="color:#EF9F27;font-size:11px">⚠ ${warnings.join('; ')}</span>`
+        : '';
+      document.getElementById('upd').innerHTML =
+        `Sep 2026 · ${pc.length} registros 1er ciclo · ${sc.length} registros 2do ciclo${warnHtml}`;
+    }
+    cascadeR();
+  } catch(err) {
+    console.error('[SIREV] Error al mostrar dashboard:', err);
+    document.getElementById('msg').style.display = 'none';
+    document.getElementById('dc').style.display  = 'block';
+  }
+}
+
 async function loadAll() {
   document.getElementById('msg').style.display = 'block';
   document.getElementById('dc').style.display  = 'none';
   document.getElementById('msg').innerHTML =
-    '<div class="spinner"></div>Cargando datos...' +
-    '<div class="proxy-status" id="proxy-status"></div>';
+    '<div class="spinner"></div><div style="margin-bottom:8px">Cargando datos...</div>' +
+    '<div class="proxy-status" id="proxy-status" style="font-size:11px;color:#8a9ab5"></div>' +
+    '<div id="skip-load" style="display:none;margin-top:14px">' +
+      '<a href="#" onclick="window._skipLoad=true;_showDashboard([],[],[]);return false;" ' +
+      'style="color:#1A6FAB;font-size:12px;text-decoration:underline">' +
+      'Abrir sin datos en tiempo real →</a></div>';
 
-  const fetchTimeout = new Promise(resolve =>
-    setTimeout(() => resolve([
-      {status:'rejected', reason: new Error('Tiempo de espera agotado')},
-      {status:'rejected', reason: new Error('Tiempo de espera agotado')}
-    ]), 16000)
-  );
-  const results = await Promise.race([
-    Promise.allSettled([fetchEval(IDS.pc), fetchEval(IDS.sc)]),
-    fetchTimeout
-  ]);
+  // Mostrar enlace "saltar" después de 4 segundos
+  const skipTimer = setTimeout(() => {
+    const el = document.getElementById('skip-load');
+    if (el) el.style.display = 'block';
+  }, 4000);
 
-  const warnings = [];
+  // Failsafe duro: forzar mostrar dashboard después de 18s pase lo que pase
+  const hardFailsafe = setTimeout(() => {
+    if (document.getElementById('msg').style.display !== 'none') {
+      clearTimeout(skipTimer);
+      _showDashboard([], [], ['Tiempo de espera agotado']);
+    }
+  }, 18000);
 
-  let pc = [];
-  if (results[0].status === 'fulfilled') {
-    pc = results[0].value;
-    pc.forEach(r => r._ciclo = 'pc');
-  } else {
-    warnings.push('Primer ciclo: ' + (results[0].reason?.message || 'error desconocido'));
+  let pc = [], sc = [], warnings = [];
+  try {
+    const fetchTimeout = new Promise(resolve =>
+      setTimeout(() => resolve([
+        {status:'rejected', reason: new Error('Tiempo de espera agotado')},
+        {status:'rejected', reason: new Error('Tiempo de espera agotado')}
+      ]), 14000)
+    );
+    const results = await Promise.race([
+      Promise.allSettled([fetchEval(IDS.pc), fetchEval(IDS.sc)]),
+      fetchTimeout
+    ]);
+
+    if (results[0].status === 'fulfilled') {
+      pc = results[0].value;
+      pc.forEach(r => r._ciclo = 'pc');
+    } else {
+      warnings.push('1er ciclo: ' + (results[0].reason?.message || 'error'));
+    }
+    if (results[1].status === 'fulfilled') {
+      sc = results[1].value;
+      sc.forEach(r => r._ciclo = 'sc');
+    } else {
+      warnings.push('2do ciclo: ' + (results[1].reason?.message || 'error'));
+    }
+  } catch(err) {
+    console.error('[SIREV] fetchError:', err);
+    warnings.push(err.message || 'error de red');
   }
 
-  let sc = [];
-  if (results[1].status === 'fulfilled') {
-    sc = results[1].value;
-    sc.forEach(r => r._ciclo = 'sc');
-  } else {
-    warnings.push('Segundo ciclo: ' + (results[1].reason?.message || 'error desconocido'));
-  }
-
-  if (!pc.length && !sc.length) {
-    console.warn('[SIREV] No se pudieron cargar los datos:', warnings);
-    ALL = [];
-    poblarTiposCentro();
-    document.getElementById('msg').style.display = 'none';
-    document.getElementById('dc').style.display  = 'block';
-    document.getElementById('upd').innerHTML = '<span style="color:#EF9F27;font-size:11px">⚠ Sin conexión — datos no disponibles · <a href="#" onclick="loadAll();return false;" style="color:#1A6FAB;text-decoration:underline">Reintentar</a></span>';
-    cascadeR();
-    return;
-  }
-
-  ALL = [...pc, ...sc];
-  poblarTiposCentro();
-
-  document.getElementById('msg').style.display = 'none';
-  document.getElementById('dc').style.display  = 'block';
-
-  const warnHtml = warnings.length
-    ? ` · <span style="color:#EF9F27;font-size:11px">⚠ ${warnings.join('; ')}</span>`
-    : '';
-  document.getElementById('upd').innerHTML =
-    `Sep 2026 · ${pc.length} registros 1er ciclo · ${sc.length} registros 2do ciclo${warnHtml}`;
-
-  cascadeR();
+  clearTimeout(skipTimer);
+  clearTimeout(hardFailsafe);
+  if (!window._skipLoad) _showDashboard(pc, sc, warnings);
 }
 
-// Load Mayo data once on startup (no auto-refresh — data is final)
+// Cargar al inicio
 loadAll();
 </script>
 </body>
