@@ -8405,12 +8405,13 @@ const _regExpanded = new Set(); // tracks which regionals are expanded
 
 function csvUrl(id) { if (id.startsWith('http')) return id; return `https://docs.google.com/spreadsheets/d/e/${id}/pub?output=csv`; }
 function proxyUrls(id) {
-  const enc = encodeURIComponent(csvUrl(id)), t = Date.now();
+  const url = csvUrl(id);
+  const enc = encodeURIComponent(url);
   return [
-    `https://corsproxy.io/?${enc}&_=${t}`,
-    `https://api.codetabs.com/v1/proxy?quest=${csvUrl(id)}`,
-    `https://thingproxy.freeboard.io/fetch/${csvUrl(id)}`,
-    csvUrl(id)
+    `https://api.allorigins.win/raw?url=${enc}`,
+    `https://corsproxy.io/?${enc}`,
+    `https://api.codetabs.com/v1/proxy?quest=${url}`,
+    url
   ];
 }
 function setStatus(m) { const e = document.getElementById('proxy-status'); if(e) e.textContent = m; }
@@ -8420,7 +8421,7 @@ async function tryFetch(id, validator) {
     setStatus(i < 3 ? `Conectando (intento ${i+1})...` : 'Intentando conexión directa...');
     try {
       const ctrl = new AbortController();
-      const to = setTimeout(() => ctrl.abort(), 5000);
+      const to = setTimeout(() => ctrl.abort(), 4000);
       const r = await fetch(proxyUrls(id)[i], { cache: 'no-store', signal: ctrl.signal });
       clearTimeout(to);
       if (r.ok) {
@@ -9313,7 +9314,7 @@ async function loadAll() {
     setTimeout(() => resolve([
       {status:'rejected', reason: new Error('Tiempo de espera agotado')},
       {status:'rejected', reason: new Error('Tiempo de espera agotado')}
-    ]), 25000)
+    ]), 16000)
   );
   const results = await Promise.race([
     Promise.allSettled([fetchEval(IDS.pc), fetchEval(IDS.sc)]),
@@ -9344,7 +9345,7 @@ async function loadAll() {
     poblarTiposCentro();
     document.getElementById('msg').style.display = 'none';
     document.getElementById('dc').style.display  = 'block';
-    document.getElementById('upd').innerHTML = '<span style="color:#EF9F27;font-size:11px">⚠ Sin conexión — datos no disponibles</span>';
+    document.getElementById('upd').innerHTML = '<span style="color:#EF9F27;font-size:11px">⚠ Sin conexión — datos no disponibles · <a href="#" onclick="loadAll();return false;" style="color:#1A6FAB;text-decoration:underline">Reintentar</a></span>';
     cascadeR();
     return;
   }
