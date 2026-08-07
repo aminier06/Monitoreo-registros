@@ -9321,9 +9321,15 @@ function _showDashboard(pc, sc, warnings, fromCache) {
     document.getElementById('msg').style.display = 'none';
     document.getElementById('dc').style.display  = 'block';
     const upd = document.getElementById('upd');
+    const sinDatos = warnings && warnings[0] === 'sin-datos';
     if (!pc.length && !sc.length) {
-      upd.innerHTML = '<span style="color:#EF9F27;font-size:11px">⚠ Sin datos en tiempo real · ' +
-        '<a href="#" onclick="loadAll();return false;" style="color:#1A6FAB;text-decoration:underline">Reintentar</a></span>';
+      if (sinDatos) {
+        upd.innerHTML = '<span style="color:#8a9ab5;font-size:11px">Período no iniciado — sin registros aún · ' +
+          '<a href="#" onclick="lsClear();loadAll();return false;" style="color:#1A6FAB;text-decoration:underline">Actualizar</a></span>';
+      } else {
+        upd.innerHTML = '<span style="color:#EF9F27;font-size:11px">⚠ Sin conexión · ' +
+          '<a href="#" onclick="loadAll();return false;" style="color:#1A6FAB;text-decoration:underline">Reintentar</a></span>';
+      }
     } else {
       const age = fromCache ? ` · <span style="color:#8a9ab5;font-size:11px">caché ${Math.round((Date.now()-fromCache)/60000)} min · <a href="#" onclick="lsClear();loadAll();return false;" style="color:#1A6FAB">Actualizar</a></span>` : '';
       upd.innerHTML = `Sep 2026 · ${pc.length} reg. 1er ciclo · ${sc.length} reg. 2do ciclo${age}`;
@@ -9380,28 +9386,18 @@ async function loadAll() {
 
 async function _refreshInBackground() {
   try {
-    const loadStatusEl = document.getElementById('load-status');
-    if (loadStatusEl) loadStatusEl.textContent = 'Intentando conexión automática...';
     const [pcRows, scRows] = await Promise.all([
       fetchEval(IDS.pc).catch(() => null),
       fetchEval(IDS.sc).catch(() => null)
     ]);
     const pc = pcRows || [], sc = scRows || [];
-    if (pc.length || sc.length) {
-      pc.forEach(r => r._ciclo = 'pc');
-      sc.forEach(r => r._ciclo = 'sc');
-      saveCache(pc, sc);
-      _showDashboard(pc, sc, []);
-    } else if (loadStatusEl) {
-      loadStatusEl.textContent = 'Sin conexión automática. Usa los archivos CSV arriba.';
-      const spinner = document.getElementById('load-spinner');
-      if (spinner) spinner.style.display = 'none';
-    }
+    pc.forEach(r => r._ciclo = 'pc');
+    sc.forEach(r => r._ciclo = 'sc');
+    if (pc.length || sc.length) saveCache(pc, sc);
+    // Show dashboard regardless — 0 rows means period not started yet
+    _showDashboard(pc, sc, pc.length || sc.length ? [] : ['sin-datos']);
   } catch(e) {
-    const el = document.getElementById('load-status');
-    if (el) el.textContent = 'Sin conexión automática. Usa los archivos CSV arriba.';
-    const spinner = document.getElementById('load-spinner');
-    if (spinner) spinner.style.display = 'none';
+    _showDashboard([], [], ['sin-datos']);
   }
 }
 
