@@ -8416,97 +8416,108 @@ function proxyUrls(id) {
 }
 function setStatus(m) { const e = document.getElementById('proxy-status'); if(e) e.textContent = m; }
 
-async function tryFetch(id, validator) {
-  for (let i = 0; i < 4; i++) {
-    setStatus(i < 3 ? `Conectando (intento ${i+1})...` : 'Intentando conexión directa...');
-    try {
-      const ctrl = new AbortController();
-      const to = setTimeout(() => ctrl.abort(), 4000);
-      const r = await fetch(proxyUrls(id)[i], { cache: 'no-store', signal: ctrl.signal });
-      clearTimeout(to);
-      if (r.ok) {
-        const txt = await r.text();
-        console.log(`[tryFetch] proxy ${i} ok, bytes=${txt.length}, first200=`, txt.slice(0,200));
-        if (txt.length < 50) { console.warn('[tryFetch] response too short, skipping'); continue; }
-        const parsed = Papa.parse(txt.trim(), { header: true, skipEmptyLines: true });
-        const headers = parsed.meta.fields || [];
-        console.log('[tryFetch] headers:', headers);
-        if (!validator(txt)) {
-          console.warn('[tryFetch] validator rejected, headers were:', headers);
-          // For the second attempt onward, accept any non-empty parse that has some columns
-          if (i > 0 && parsed.data.length > 0 && headers.length > 2) {
-            console.warn('[tryFetch] accepting anyway due to non-empty data');
-            setStatus('');
-            return parsed.data;
-          }
-          continue;
-        }
-        setStatus('');
-        return parsed.data;
-      } else {
-        console.warn(`[tryFetch] proxy ${i} HTTP ${r.status}`);
-      }
-    } catch(e) { console.warn(`[tryFetch] proxy ${i} error:`, e.message); continue; }
-  }
-  throw new Error('No se pudo conectar con la hoja ' + id);
-}
-
-// ── fetchEval con normalización de columnas ──────────────────────────────────
-async function fetchEval(id) {
-  const rows = await tryFetch(
-    id,
-    t => t.length > 50  // accept any non-trivial response; column check happens inside
-  );
-
-  console.log(`[fetchEval] id=${id.slice(-20)} rawRows=${rows.length}`);
-  if (rows.length > 0) console.log('[fetchEval] raw columns:', Object.keys(rows[0]));
-
-  const mapped = rows.map(r => {
+// ── Normalización de filas CSV (usada tanto en fetch como en carga manual) ──
+function mapCSVRows(rawRows) {
+  const mapped = rawRows.map(r => {
     const out = {};
     for (const [k, v] of Object.entries(r)) {
       const kn = k.trim()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/\s+/g, ' ')
-        .toUpperCase();
-
-      if      (kn.includes('SIGERD'))                           out['Código SIGERD']     = (v || '').trim();
-      else if (kn === 'REGIONAL' || kn.startsWith('REGIONAL '))out['REGIONAL']           = (v || '').trim();
-      else if (kn.includes('DISTRITO'))                         out['DISTRITO EDUCATIVO'] = (v || '').trim();
-      else if (kn === 'SECTOR' || kn.startsWith('SECTOR '))    out['SECTOR']             = (v || '').trim();
-      else if (kn.includes('TANDA'))                            out['TANDA']              = (v || '').trim();
-      else if (kn.includes('TIPO'))                             out['TIPO DE CENTRO']     = (v || '').trim();
-      else if (kn.includes('CENTRO') || kn.includes('NOMBRE')) out['CENTRO EDUCATIVO']   = (v || '').trim();
-      // Always keep raw key too so fallback functions can find it
-      out['_raw_' + kn] = (v || '').trim();
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/\s+/g, ' ').toUpperCase();
+      if      (kn.includes('SIGERD'))                            out['Código SIGERD']     = (v||'').trim();
+      else if (kn === 'REGIONAL' || kn.startsWith('REGIONAL ')) out['REGIONAL']           = (v||'').trim();
+      else if (kn.includes('DISTRITO'))                          out['DISTRITO EDUCATIVO'] = (v||'').trim();
+      else if (kn === 'SECTOR' || kn.startsWith('SECTOR '))     out['SECTOR']             = (v||'').trim();
+      else if (kn.includes('TANDA'))                             out['TANDA']              = (v||'').trim();
+      else if (kn.includes('TIPO'))                              out['TIPO DE CENTRO']     = (v||'').trim();
+      else if (kn.includes('CENTRO') || kn.includes('NOMBRE'))  out['CENTRO EDUCATIVO']   = (v||'').trim();
+      out['_raw_' + kn] = (v||'').trim();
     }
     return out;
   });
+  return mapped.filter(r => r['Código SIGERD'] && r['Código SIGERD'].trim());
+}
 
-  // Log all unique column names found for diagnostics
-  if (rows.length > 0) {
-    const allKeys = [...new Set(rows.flatMap(r => Object.keys(r)))];
-    console.log('[fetchEval] ALL raw column names:', allKeys);
-    const sample = mapped[0];
-    console.log('[fetchEval] Mapped keys sample:', Object.keys(sample));
-    const tandaSample = mapped.slice(0,5).map(r => r['TANDA']).filter(Boolean);
-    const tipoSample  = mapped.slice(0,5).map(r => r['TIPO DE CENTRO']).filter(Boolean);
-    console.log('[fetchEval] TANDA sample values:', tandaSample);
-    console.log('[fetchEval] TIPO DE CENTRO sample values:', tipoSample);
-    // Show diagnostic in UI once
-    if (!window._colDiagShown) {
-      window._colDiagShown = true;
-      window._rawColNames = allKeys;
-      console.warn('[fetchEval] Raw columns for diagnosis:', JSON.stringify(allKeys));
+// ── localStorage cache ────────────────────────────────────────────────────────
+const LS = { pc: 'sirev_sept26_pc', sc: 'sirev_sept26_sc', ts: 'sirev_sept26_ts' };
+const LS_MAX_AGE = 6 * 60 * 60 * 1000; // 6 horas
+
+function lsGet(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } }
+function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) { console.warn('LS full', e); } }
+function lsClear() { [LS.pc, LS.sc, LS.ts].forEach(k => localStorage.removeItem(k)); }
+
+function loadCache() {
+  const ts = lsGet(LS.ts);
+  if (!ts || Date.now() - ts > LS_MAX_AGE) return null;
+  const pc = lsGet(LS.pc), sc = lsGet(LS.sc);
+  if (!pc || !sc) return null;
+  return { pc, sc, ts };
+}
+function saveCache(pc, sc) {
+  lsSet(LS.pc, pc); lsSet(LS.sc, sc); lsSet(LS.ts, Date.now());
+}
+
+// ── Fetch via CORS proxy (intento en background) ──────────────────────────────
+async function tryFetch(id) {
+  const url = csvUrl(id);
+  const enc = encodeURIComponent(url);
+  const proxies = [
+    `https://api.allorigins.win/raw?url=${enc}`,
+    `https://corsproxy.io/?${enc}`,
+    `https://api.codetabs.com/v1/proxy?quest=${url}`,
+    url
+  ];
+  for (let i = 0; i < proxies.length; i++) {
+    try {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 5000);
+      const r = await fetch(proxies[i], { cache: 'no-store', signal: ctrl.signal });
+      clearTimeout(to);
+      if (!r.ok) continue;
+      const txt = await r.text();
+      if (txt.length < 100) continue;
+      const parsed = Papa.parse(txt.trim(), { header: true, skipEmptyLines: true });
+      if (parsed.data.length < 5) continue;
+      return parsed.data;
+    } catch(e) { continue; }
+  }
+  throw new Error('Sin conexión');
+}
+
+async function fetchEval(id) {
+  const rows = await tryFetch(id);
+  return mapCSVRows(rows);
+}
+
+// ── Carga manual desde archivo CSV ───────────────────────────────────────────
+let _manualPC = null, _manualSC = null;
+
+function loadCSVFile(ciclo) {
+  const input = document.getElementById('file-' + ciclo);
+  if (!input || !input.files[0]) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const parsed = Papa.parse(e.target.result.trim(), { header: true, skipEmptyLines: true });
+      const rows = mapCSVRows(parsed.data);
+      rows.forEach(r => r._ciclo = ciclo);
+      if (ciclo === 'pc') _manualPC = rows;
+      else _manualSC = rows;
+
+      const statusEl = document.getElementById('manual-status');
+      if (_manualPC && _manualSC) {
+        saveCache(_manualPC, _manualSC);
+        _showDashboard(_manualPC, _manualSC, []);
+      } else if (statusEl) {
+        const otro = ciclo === 'pc' ? '2do ciclo (SC)' : '1er ciclo (PC)';
+        statusEl.textContent = `✓ ${ciclo.toUpperCase()} cargado (${rows.length} registros). Falta: ${otro}`;
+      }
+    } catch(err) {
+      const statusEl = document.getElementById('manual-status');
+      if (statusEl) statusEl.textContent = 'Error al leer el archivo: ' + err.message;
     }
-  }
-
-  const filtered = mapped.filter(r => r['Código SIGERD'] && r['Código SIGERD'].trim());
-  console.log(`[fetchEval] after filter: ${filtered.length} rows with Código SIGERD`);
-  if (filtered.length === 0 && mapped.length > 0) {
-    console.error('[fetchEval] WARNING: all rows filtered out. Mapped keys sample:', Object.keys(mapped[0]));
-  }
-  return filtered;
+  };
+  reader.readAsText(input.files[0]);
 }
 
 function num(r, k) { return parseInt(r[k] || 0) || 0; }
@@ -9303,89 +9314,95 @@ function onCentroKey(e) {
   }
 }
 
-function _showDashboard(pc, sc, warnings) {
+function _showDashboard(pc, sc, warnings, fromCache) {
   try {
     ALL = [...pc, ...sc];
     poblarTiposCentro();
     document.getElementById('msg').style.display = 'none';
     document.getElementById('dc').style.display  = 'block';
+    const upd = document.getElementById('upd');
     if (!pc.length && !sc.length) {
-      document.getElementById('upd').innerHTML =
-        '<span style="color:#EF9F27;font-size:11px">⚠ Sin conexión — datos históricos disponibles · ' +
+      upd.innerHTML = '<span style="color:#EF9F27;font-size:11px">⚠ Sin datos en tiempo real · ' +
         '<a href="#" onclick="loadAll();return false;" style="color:#1A6FAB;text-decoration:underline">Reintentar</a></span>';
     } else {
-      const warnHtml = warnings.length
-        ? ` · <span style="color:#EF9F27;font-size:11px">⚠ ${warnings.join('; ')}</span>`
-        : '';
-      document.getElementById('upd').innerHTML =
-        `Sep 2026 · ${pc.length} registros 1er ciclo · ${sc.length} registros 2do ciclo${warnHtml}`;
+      const age = fromCache ? ` · <span style="color:#8a9ab5;font-size:11px">caché ${Math.round((Date.now()-fromCache)/60000)} min · <a href="#" onclick="lsClear();loadAll();return false;" style="color:#1A6FAB">Actualizar</a></span>` : '';
+      upd.innerHTML = `Sep 2026 · ${pc.length} reg. 1er ciclo · ${sc.length} reg. 2do ciclo${age}`;
     }
     cascadeR();
   } catch(err) {
-    console.error('[SIREV] Error al mostrar dashboard:', err);
+    console.error('[SIREV]', err);
     document.getElementById('msg').style.display = 'none';
     document.getElementById('dc').style.display  = 'block';
   }
 }
 
 async function loadAll() {
-  document.getElementById('msg').style.display = 'block';
-  document.getElementById('dc').style.display  = 'none';
-  document.getElementById('msg').innerHTML =
-    '<div class="spinner"></div><div style="margin-bottom:8px">Cargando datos...</div>' +
-    '<div class="proxy-status" id="proxy-status" style="font-size:11px;color:#8a9ab5"></div>' +
-    '<div id="skip-load" style="display:none;margin-top:14px">' +
-      '<a href="#" onclick="window._skipLoad=true;_showDashboard([],[],[]);return false;" ' +
-      'style="color:#1A6FAB;font-size:12px;text-decoration:underline">' +
-      'Abrir sin datos en tiempo real →</a></div>';
-
-  // Mostrar enlace "saltar" después de 4 segundos
-  const skipTimer = setTimeout(() => {
-    const el = document.getElementById('skip-load');
-    if (el) el.style.display = 'block';
-  }, 4000);
-
-  // Failsafe duro: forzar mostrar dashboard después de 18s pase lo que pase
-  const hardFailsafe = setTimeout(() => {
-    if (document.getElementById('msg').style.display !== 'none') {
-      clearTimeout(skipTimer);
-      _showDashboard([], [], ['Tiempo de espera agotado']);
-    }
-  }, 18000);
-
-  let pc = [], sc = [], warnings = [];
-  try {
-    const fetchTimeout = new Promise(resolve =>
-      setTimeout(() => resolve([
-        {status:'rejected', reason: new Error('Tiempo de espera agotado')},
-        {status:'rejected', reason: new Error('Tiempo de espera agotado')}
-      ]), 14000)
-    );
-    const results = await Promise.race([
-      Promise.allSettled([fetchEval(IDS.pc), fetchEval(IDS.sc)]),
-      fetchTimeout
-    ]);
-
-    if (results[0].status === 'fulfilled') {
-      pc = results[0].value;
-      pc.forEach(r => r._ciclo = 'pc');
-    } else {
-      warnings.push('1er ciclo: ' + (results[0].reason?.message || 'error'));
-    }
-    if (results[1].status === 'fulfilled') {
-      sc = results[1].value;
-      sc.forEach(r => r._ciclo = 'sc');
-    } else {
-      warnings.push('2do ciclo: ' + (results[1].reason?.message || 'error'));
-    }
-  } catch(err) {
-    console.error('[SIREV] fetchError:', err);
-    warnings.push(err.message || 'error de red');
+  // 1. Intentar caché localStorage primero
+  const cached = loadCache();
+  if (cached) {
+    const { pc, sc, ts } = cached;
+    pc.forEach(r => r._ciclo = 'pc');
+    sc.forEach(r => r._ciclo = 'sc');
+    _showDashboard(pc, sc, [], ts);
+    // Actualizar en background sin bloquear UI
+    _refreshInBackground();
+    return;
   }
 
-  clearTimeout(skipTimer);
-  clearTimeout(hardFailsafe);
-  if (!window._skipLoad) _showDashboard(pc, sc, warnings);
+  // 2. Sin caché — mostrar UI de carga con opción manual
+  document.getElementById('msg').style.display = 'block';
+  document.getElementById('dc').style.display  = 'none';
+  document.getElementById('msg').innerHTML = `
+    <div class="spinner" id="load-spinner"></div>
+    <div style="margin-bottom:6px;font-weight:500">Conectando con Google Sheets...</div>
+    <div id="load-status" style="font-size:11px;color:#8a9ab5;margin-bottom:16px"></div>
+    <div style="border-top:1px solid #dde6f0;padding-top:16px;margin-top:4px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:4px">Cargar archivos manualmente</div>
+      <div style="font-size:12px;color:#4a6080;margin-bottom:10px">
+        Descarga los CSV desde Google Sheets y selecciónalos aquí:
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;text-align:left;max-width:400px;margin:0 auto">
+        <label style="font-size:12px;display:flex;align-items:center;gap:8px">
+          <span style="min-width:90px;font-weight:500">1er ciclo:</span>
+          <input type="file" id="file-pc" accept=".csv" onchange="loadCSVFile('pc')" style="font-size:12px">
+        </label>
+        <label style="font-size:12px;display:flex;align-items:center;gap:8px">
+          <span style="min-width:90px;font-weight:500">2do ciclo:</span>
+          <input type="file" id="file-sc" accept=".csv" onchange="loadCSVFile('sc')" style="font-size:12px">
+        </label>
+      </div>
+      <div id="manual-status" style="font-size:12px;color:#1D9E75;margin-top:10px;min-height:18px"></div>
+    </div>`;
+
+  // 3. Intentar fetch automático en background (no bloquea UI)
+  _refreshInBackground();
+}
+
+async function _refreshInBackground() {
+  try {
+    const loadStatusEl = document.getElementById('load-status');
+    if (loadStatusEl) loadStatusEl.textContent = 'Intentando conexión automática...';
+    const [pcRows, scRows] = await Promise.all([
+      fetchEval(IDS.pc).catch(() => null),
+      fetchEval(IDS.sc).catch(() => null)
+    ]);
+    const pc = pcRows || [], sc = scRows || [];
+    if (pc.length || sc.length) {
+      pc.forEach(r => r._ciclo = 'pc');
+      sc.forEach(r => r._ciclo = 'sc');
+      saveCache(pc, sc);
+      _showDashboard(pc, sc, []);
+    } else if (loadStatusEl) {
+      loadStatusEl.textContent = 'Sin conexión automática. Usa los archivos CSV arriba.';
+      const spinner = document.getElementById('load-spinner');
+      if (spinner) spinner.style.display = 'none';
+    }
+  } catch(e) {
+    const el = document.getElementById('load-status');
+    if (el) el.textContent = 'Sin conexión automática. Usa los archivos CSV arriba.';
+    const spinner = document.getElementById('load-spinner');
+    if (spinner) spinner.style.display = 'none';
+  }
 }
 
 // Cargar al inicio
