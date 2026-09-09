@@ -8558,7 +8558,7 @@ async function tryFetch(id) {
       const txt = await r.text();
       if (txt.length < 100) continue;
       const parsed = Papa.parse(txt.trim(), { header: true, skipEmptyLines: true });
-      if (parsed.data.length < 5) continue;
+      if (parsed.data.length < 1) continue;
       return parsed.data;
     } catch(e) { continue; }
   }
