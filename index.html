@@ -8510,7 +8510,7 @@ function mapCSVRows(rawRows) {
 }
 
 // ── localStorage cache ────────────────────────────────────────────────────────
-const LS_MAX_AGE = 6 * 60 * 60 * 1000; // 6 horas
+const LS_MAX_AGE = 5 * 60 * 1000; // 5 minutos
 
 function lsGet(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } }
 function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) { console.warn('LS full', e); } }
@@ -9507,6 +9507,13 @@ async function _fetchBackground(p) {
   }
 }
 loadAll();
+
+// Auto-refresco cada 10 minutos en períodos activos
+setInterval(() => {
+  if (LIVE_PERIODS.has(_activePeriod)) {
+    _fetchBackground(_activePeriod);
+  }
+}, 3 * 60 * 1000);
 </script>
 </body>
 </html>
