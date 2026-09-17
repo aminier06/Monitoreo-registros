@@ -401,6 +401,10 @@ tbody td.num { text-align:right; font-variant-numeric:tabular-nums; font-weight:
   </div>
   <div class="header-right">
     <span id="upd" style="font-size:12px;color:rgba(255,255,255,.75)">—</span>
+    <button id="btnActualizar" type="button" onclick="actualizarDatos()" title="Descarta los datos guardados y vuelve a descargar las hojas"
+      style="margin-left:10px;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">Actualizar datos</button>
+    <span id="sello" title="Versión del archivo que está ejecutando el navegador. Si no coincide con la que acaba de publicar, el navegador está sirviendo una copia guardada: recargue con Ctrl+F5."
+      style="margin-left:10px;font-size:10.5px;color:rgba(255,255,255,.45);letter-spacing:.04em">v2026.09.17</span>
   </div>
 </div>
 
@@ -8521,6 +8525,18 @@ function lsSet(key, val) {
 }
 let _cacheDegradado = false;
 
+/* Descarta el caché del período activo y vuelve a descargar. Es la salida
+   cuando la pantalla muestra datos viejos: hasta ahora había que conocer el
+   enlace "Forzar" escondido en la línea de estado. */
+function actualizarDatos() {
+  const btn = document.getElementById('btnActualizar');
+  if (btn) { btn.disabled = true; btn.textContent = 'Actualizando…'; }
+  try { lsClear(_activePeriod); } catch(e) {}
+  try { loadAll(_activePeriod); } catch(e) { console.error(e); }
+  setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = 'Actualizar datos'; } }, 4000);
+}
+window.actualizarDatos = actualizarDatos;
+
 function lsClear(p) {
   p = p || _activePeriod;
   const ls = PERIOD_CFG[p] && PERIOD_CFG[p].ls;
@@ -8566,39 +8582,76 @@ function saveCache(pc, sc, p) {
 }
 
 // ── Fetch via CORS proxy (intento en background) ──────────────────────────────
+/* Descarga una hoja publicada y devuelve sus filas ya mapeadas.
+
+   ORDEN DE LAS FUENTES. Antes se intentaban primero tres proxies CORS públicos
+   y la URL directa quedaba de última. Eso estaba al revés: las hojas publicadas
+   de Google responden con cabeceras CORS en los dos saltos de la descarga
+       307 docs.google.com   → access-control-allow-origin: <origen que pide>
+       200 googleusercontent → access-control-allow-origin: *
+   así que el navegador puede bajarlas directamente y los proxies sobran. Peor
+   aún: con la hoja de segundo ciclo, que ronda los 3 MB, los proxies devuelven
+   error o una respuesta recortada, y al recortarse se pierde la COLA del
+   archivo. Los centros del final quedaban como si no hubieran reportado aunque
+   sus datos estuvieran en la hoja. Ahora la descarga directa va primero y los
+   proxies quedan solo como respaldo.
+
+   CONTROL DE INTEGRIDAD. Una respuesta recortada sigue siendo un CSV válido a
+   medias: Papa.parse la convierte en filas y la última queda incompleta. Por
+   eso no basta con que haya filas; se compara el número de campos de la última
+   fila contra el encabezado y se descarta la fuente si viene corta. */
 async function tryFetch(id) {
   const url = csvUrl(id);
   const enc = encodeURIComponent(url);
-  const proxies = [
-    `https://api.allorigins.win/raw?url=${enc}`,
-    `https://corsproxy.io/?${enc}`,
-    `https://api.codetabs.com/v1/proxy?quest=${url}`,
-    url
+  const fuentes = [
+    { url, nombre: 'directa', ms: 45000 },
+    { url: `https://api.allorigins.win/raw?url=${enc}`,      nombre: 'allorigins', ms: 15000 },
+    { url: `https://corsproxy.io/?${enc}`,                    nombre: 'corsproxy',  ms: 15000 },
+    { url: `https://api.codetabs.com/v1/proxy?quest=${url}`,  nombre: 'codetabs',   ms: 15000 }
   ];
-  for (let i = 0; i < proxies.length; i++) {
+
+  for (const f of fuentes) {
     try {
       const ctrl = new AbortController();
-      const to = setTimeout(() => ctrl.abort(), 5000);
-      const r = await fetch(proxies[i], { cache: 'no-store', signal: ctrl.signal });
-      clearTimeout(to);
-      if (!r.ok) continue;
+      const to = setTimeout(() => ctrl.abort(), f.ms);
+      let r;
+      try { r = await fetch(f.url, { cache: 'no-store', signal: ctrl.signal }); }
+      finally { clearTimeout(to); }
+      if (!r.ok) { console.warn('[SIREV] ' + f.nombre + ': HTTP ' + r.status); continue; }
+
       const txt = await r.text();
-      if (txt.length < 100) continue;
-      // Un proxy caído suele devolver una página de error. Papa.parse la
-      // convierte igual en filas, así que antes se aceptaba esa basura como
-      // éxito y los proxies restantes no llegaban a probarse. Ahora se exige
-      // que las filas se mapeen a centros con código SIGERD.
+      if (txt.length < 100) { console.warn('[SIREV] ' + f.nombre + ': respuesta demasiado corta'); continue; }
+
       const parsed = Papa.parse(txt.trim(), { header: true, skipEmptyLines: true });
-      if (parsed.data.length < 1) continue;
-      const centros = mapCSVRows(parsed.data);
-      if (centros.length < 1) {
-        console.warn('[SIREV] respuesta sin centros válidos desde', proxies[i].slice(0, 60));
+      if (!parsed.data.length) { console.warn('[SIREV] ' + f.nombre + ': sin filas'); continue; }
+
+      // ¿Llegó completo? La última fila debe tener tantos campos como el encabezado.
+      const columnas = (parsed.meta && parsed.meta.fields) ? parsed.meta.fields.length : 0;
+      const ultima = parsed.data[parsed.data.length - 1];
+      const camposUltima = ultima ? Object.keys(ultima).filter(k => ultima[k] !== undefined && ultima[k] !== null).length : 0;
+      // Se exige coincidencia EXACTA, no un porcentaje: en estas hojas ninguna
+      // fila tiene menos campos que el encabezado, así que una última fila corta
+      // solo puede significar que la descarga se cortó a mitad de línea. Un
+      // umbral del 90% no servía: con 227 columnas, un recorte deja 217 campos
+      // y habría pasado como válido.
+      if (columnas && camposUltima < columnas) {
+        console.warn('[SIREV] ' + f.nombre + ': respuesta recortada (última fila con ' +
+                     camposUltima + ' de ' + columnas + ' columnas) — se descarta');
         continue;
       }
+
+      const centros = mapCSVRows(parsed.data);
+      if (centros.length < 1) { console.warn('[SIREV] ' + f.nombre + ': sin centros válidos'); continue; }
+
+      console.info('[SIREV] hoja descargada por ' + f.nombre + ': ' + centros.length +
+                   ' centros · ' + Math.round(txt.length / 1024) + ' KB');
       return centros;
-    } catch(e) { continue; }
+    } catch (e) {
+      console.warn('[SIREV] ' + f.nombre + ': ' + (e && e.name === 'AbortError' ? 'tiempo agotado' : (e && e.message)));
+      continue;
+    }
   }
-  throw new Error('Ninguna fuente devolvió datos válidos');
+  throw new Error('Ninguna fuente devolvió la hoja completa');
 }
 
 async function fetchEval(id) {
@@ -9512,7 +9565,13 @@ function loadAll(p) {
     if (dc)  dc.style.display  = 'block';
     try { poblarTiposCentro(); cascadeR(); } catch(e) {}
     const age = Math.round((Date.now()-ts)/60000);
-    if (upd) upd.innerHTML = `${label} · ${pc.length} reg. 1er ciclo · ${sc.length} reg. 2do ciclo <span style="color:#8a9ab5;font-size:11px">(caché ${age} min · actualizando… · <a href="#" onclick="lsClear('${p}');loadAll('${p}');return false;" style="color:#1A6FAB">Forzar</a>)</span>`;
+    // Un caché de minutos es normal; uno de horas significa que las descargas
+    // llevan tiempo fallando y lo que se ve en pantalla ya no es el estado real.
+    const viejo = age >= 30;
+    if (upd) upd.innerHTML = `${label} · ${pc.length} reg. 1er ciclo · ${sc.length} reg. 2do ciclo `
+      + `<span style="font-size:11px;color:${viejo ? '#ffd07a' : 'rgba(255,255,255,.6)'}">`
+      + (viejo ? `⚠ datos guardados hace ${age} min · sin actualizar` : `(guardado hace ${age} min · actualizando…)`)
+      + `</span>`;
     if (hasUrls) _fetchBackground(p); // refrescar en background igual
     return;
   }
