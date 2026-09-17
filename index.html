@@ -404,7 +404,7 @@ tbody td.num { text-align:right; font-variant-numeric:tabular-nums; font-weight:
     <button id="btnActualizar" type="button" onclick="actualizarDatos()" title="Descarta los datos guardados y vuelve a descargar las hojas"
       style="margin-left:10px;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">Actualizar datos</button>
     <span id="sello" title="Versión del archivo que está ejecutando el navegador. Si no coincide con la que acaba de publicar, el navegador está sirviendo una copia guardada: recargue con Ctrl+F5."
-      style="margin-left:10px;font-size:10.5px;color:rgba(255,255,255,.45);letter-spacing:.04em">v2026.09.17</span>
+      style="margin-left:10px;font-size:10.5px;color:rgba(255,255,255,.45);letter-spacing:.04em">v2026.09.17a</span>
   </div>
 </div>
 
@@ -8734,17 +8734,88 @@ function getTandaFromRow(r) {
   return r['TANDA'] ? r['TANDA'].trim() : '';
 }
 
-function getTipoCentroFromCatalog(c) {
-  if (c.tipoCentro) return c.tipoCentro;
-  const cod = normCod(c.codigo);
-  const row = ALL.find(r => normCod(r['Código SIGERD']) === cod && getTipoCentroFromRow(r));
-  return row ? getTipoCentroFromRow(row) : '';
+/* ── TIPO DE CENTRO: una sola clasificación por centro ─────────────────────
+   El tipo lo escribe quien llena el formulario, y 44 centros se declararon
+   distinto en cada ciclo: 00739, por ejemplo, puso "Regular" en primer ciclo y
+   "Multigrado" en segundo.
+
+   Antes el filtro se aplicaba fila por fila, así que al filtrar por "Regular"
+   la fila de segundo ciclo de ese centro desaparecía y el tablero lo mostraba
+   como no reportado —con el centro aún contado en el denominador, porque el
+   catálogo sí lo conservaba—. Un centro que había reportado ambos ciclos
+   aparecía en 0%.
+
+   El tipo es una propiedad del centro, no de cada envío. Se resuelve una vez
+   por código y esa clasificación se usa tanto para el catálogo como para las
+   filas, de modo que el filtro no puede volver a ocultar un ciclo reportado. */
+let _tipoPorCentro = new Map();
+
+function construirTiposPorCentro() {
+  const conteo = new Map();
+  for (const r of (typeof ALL !== 'undefined' ? ALL : [])) {
+    const cod = normCod(r['Código SIGERD']);
+    const t = (r['TIPO DE CENTRO'] || '').trim();
+    if (!cod || !t) continue;
+    if (!conteo.has(cod)) conteo.set(cod, new Map());
+    const m = conteo.get(cod);
+    m.set(t, (m.get(t) || 0) + 1);
+  }
+  const mapa = new Map();
+  // El catálogo manda cuando trae el dato.
+  for (const c of CATALOGO) {
+    if (c.tipoCentro) mapa.set(normCod(c.codigo), c.tipoCentro.trim());
+  }
+  // Para el resto, la declaración más frecuente del propio centro.
+  for (const [cod, m] of conteo) {
+    if (mapa.has(cod)) continue;
+    let mejor = '', max = -1;
+    for (const [t, n] of m) if (n > max) { mejor = t; max = n; }
+    if (mejor) mapa.set(cod, mejor);
+  }
+  _tipoPorCentro = mapa;
+  return mapa;
 }
 
+/* Centros cuyas declaraciones de tipo no coinciden entre ciclos.
+   Uso desde la consola: tiposEnConflicto() */
+function tiposEnConflicto() {
+  const porCentro = new Map();
+  for (const r of (typeof ALL !== 'undefined' ? ALL : [])) {
+    const cod = normCod(r['Código SIGERD']);
+    const t = (r['TIPO DE CENTRO'] || '').trim();
+    if (!cod || !t) continue;
+    if (!porCentro.has(cod)) porCentro.set(cod, new Map());
+    porCentro.get(cod).set(t, (porCentro.get(cod).get(t) || 0) + (r._ciclo === 'pc' ? 0 : 0) + 1);
+  }
+  const salida = [];
+  for (const [cod, m] of porCentro) {
+    if (m.size > 1) {
+      const c = CATALOGO.find(x => normCod(x.codigo) === cod);
+      salida.push({ codigo: cod, centro: c ? c.nombre : '', declaraciones: [...m.keys()].join(' / '),
+                    seUsa: _tipoPorCentro.get(cod) || '(sin definir)' });
+    }
+  }
+  return salida;
+}
+window.tiposEnConflicto = tiposEnConflicto;
+
+function tipoDeCentro(cod) {
+  if (!_tipoPorCentro.size) construirTiposPorCentro();
+  return _tipoPorCentro.get(normCod(cod)) || '';
+}
+
+function getTipoCentroFromCatalog(c) {
+  if (c.tipoCentro) return c.tipoCentro;
+  return tipoDeCentro(c.codigo);
+}
+
+// Ambos filtros consultan la MISMA clasificación, por código de centro.
 function esTipoOKRow(r) {
   const fTipo = norm(document.getElementById('fTipo')?.value || '');
   if (!fTipo) return true;
-  return norm(getTipoCentroFromRow(r)) === fTipo;
+  const tipo = norm(tipoDeCentro(r['Código SIGERD']));
+  if (!tipo) return true; // tipo desconocido — no excluir
+  return tipo === fTipo;
 }
 
 function esTipoOKCatalog(c) {
@@ -8775,6 +8846,7 @@ function popSelect(id, vals, ph) {
 }
 
 function poblarTiposCentro() {
+  construirTiposPorCentro();   // el mapa debe rehacerse con cada carga de datos
   // Known tipos in the system — always show these as base
   const tiposBase = ['Regular', 'Multigrado'];
   // Augment with any values that come from live data
